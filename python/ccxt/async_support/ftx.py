@@ -23,12 +23,13 @@ class ftx(Exchange):
             'rateLimit': 100,
             'certified': True,
             'pro': True,
+            'hostname': 'ftx.com',  # or ftx.us
             'urls': {
                 'logo': 'https://user-images.githubusercontent.com/1294454/67149189-df896480-f2b0-11e9-8816-41593e17f9ec.jpg',
                 'www': 'https://ftx.com',
                 'api': {
-                    'public': 'https://ftx.com',
-                    'private': 'https://ftx.com',
+                    'public': 'https://{hostname}',
+                    'private': 'https://{hostname}',
                 },
                 'doc': 'https://github.com/ftexchange/ftx',
                 'fees': 'https://ftexchange.zendesk.com/hc/en-us/articles/360024479432-Fees',
@@ -102,6 +103,7 @@ class ftx(Exchange):
                         'lt/redemptions',
                         'subaccounts',
                         'subaccounts/{nickname}/balances',
+                        'otc/quotes/{quoteId}',
                     ],
                     'post': [
                         'account/leverage',
@@ -113,6 +115,8 @@ class ftx(Exchange):
                         'subaccounts',
                         'subaccounts/update_name',
                         'subaccounts/transfer',
+                        'otc/quotes/{quote_id}/accept',
+                        'otc/quotes',
                     ],
                     'delete': [
                         'orders/{order_id}',
@@ -482,7 +486,7 @@ class ftx(Exchange):
         result = self.safe_value(response, 'result', {})
         return self.parse_order_book(result)
 
-    def parse_ohlcv(self, ohlcv, market=None, timeframe='1m', since=None, limit=None):
+    def parse_ohlcv(self, ohlcv, market=None):
         #
         #     {
         #         "close":177.23,
@@ -503,12 +507,26 @@ class ftx(Exchange):
             self.safe_float(ohlcv, 'volume'),
         ]
 
+    def get_market_id(self, symbol, key, params={}):
+        parts = self.get_market_params(symbol, key, params)
+        return self.safe_string(parts, 1, symbol)
+
+    def get_market_params(self, symbol, key, params={}):
+        market = None
+        marketId = None
+        if symbol in self.markets:
+            market = self.market(symbol)
+            marketId = market['id']
+        else:
+            marketId = self.safe_string(params, key, symbol)
+        return [market, marketId]
+
     async def fetch_ohlcv(self, symbol, timeframe='1m', since=None, limit=None, params={}):
         await self.load_markets()
-        market = self.market(symbol)
+        market, marketId = self.get_market_params(symbol, 'market_name', params)
         request = {
-            'market_name': market['id'],
             'resolution': self.timeframes[timeframe],
+            'market_name': marketId,
         }
         # max 1501 candles, including the current candle when since is not specified
         limit = 1501 if (limit is None) else limit
@@ -635,9 +653,9 @@ class ftx(Exchange):
 
     async def fetch_trades(self, symbol, since=None, limit=None, params={}):
         await self.load_markets()
-        market = self.market(symbol)
+        market, marketId = self.get_market_params(symbol, 'market_name', params)
         request = {
-            'market_name': market['id'],
+            'market_name': marketId,
         }
         if since is not None:
             request['start_time'] = int(since / 1000)
@@ -823,9 +841,14 @@ class ftx(Exchange):
         remaining = self.safe_float(order, 'remainingSize')
         symbol = None
         marketId = self.safe_string(order, 'market')
-        if marketId in self.markets_by_id:
-            market = self.markets_by_id[marketId]
-            symbol = market['symbol']
+        if marketId is not None:
+            if marketId in self.markets_by_id:
+                market = self.markets_by_id[marketId]
+                symbol = market['symbol']
+            else:
+                # support for delisted market ids
+                # https://github.com/ccxt/ccxt/issues/7113
+                symbol = marketId
         if (symbol is None) and (market is not None):
             symbol = market['symbol']
         status = self.parse_order_status(self.safe_string(order, 'status'))
@@ -876,7 +899,7 @@ class ftx(Exchange):
         }
         clientOrderId = self.safe_string_2(params, 'clientId', 'clientOrderId')
         if clientOrderId is not None:
-            params['clientId'] = clientOrderId
+            request['clientId'] = clientOrderId
             params = self.omit(params, ['clientId', 'clientOrderId'])
         priceToPrecision = None
         if price is not None:
@@ -987,10 +1010,9 @@ class ftx(Exchange):
             'conditionalOrdersOnly': False,  # cancel conditional orders only
             'limitOrdersOnly': False,  # cancel existing limit orders(non-conditional orders) only
         }
-        market = None
-        if symbol is not None:
-            market = self.market(symbol)
-            request['market'] = market['id']
+        marketId = self.get_market_id(symbol, 'market', params)
+        if marketId is not None:
+            request['market'] = marketId
         response = await self.privateDeleteOrders(self.extend(request, params))
         result = self.safe_value(response, 'result', {})
         #
@@ -1042,10 +1064,9 @@ class ftx(Exchange):
     async def fetch_open_orders(self, symbol=None, since=None, limit=None, params={}):
         await self.load_markets()
         request = {}
-        market = None
-        if symbol is not None:
-            market = self.market(symbol)
-            request['market'] = market['id']
+        market, marketId = self.get_market_params(symbol, 'market', params)
+        if marketId is not None:
+            request['market'] = marketId
         # support for canceling conditional orders
         # https://github.com/ccxt/ccxt/issues/6669
         options = self.safe_value(self.options, 'fetchOpenOrders', {})
@@ -1087,10 +1108,9 @@ class ftx(Exchange):
     async def fetch_orders(self, symbol=None, since=None, limit=None, params={}):
         await self.load_markets()
         request = {}
-        market = None
-        if symbol is not None:
-            market = self.market(symbol)
-            request['market'] = market['id']
+        market, marketId = self.get_market_params(symbol, 'market', params)
+        if marketId is not None:
+            request['market'] = marketId
         if limit is not None:
             request['limit'] = limit  # default 100, max 100
         if since is not None:
@@ -1135,10 +1155,10 @@ class ftx(Exchange):
 
     async def fetch_my_trades(self, symbol=None, since=None, limit=None, params={}):
         await self.load_markets()
-        market = self.market(symbol)
-        request = {
-            'market': market['id'],
-        }
+        market, marketId = self.get_market_params(symbol, 'market', params)
+        request = {}
+        if marketId is not None:
+            request['market'] = marketId
         if limit is not None:
             request['limit'] = limit
         if since is not None:
@@ -1353,7 +1373,8 @@ class ftx(Exchange):
     def sign(self, path, api='public', method='GET', params={}, headers=None, body=None):
         request = '/api/' + self.implode_params(path, params)
         query = self.omit(params, self.extract_params(path))
-        url = self.urls['api'][api] + request
+        baseUrl = self.implode_params(self.urls['api'][api], {'hostname': self.hostname})
+        url = baseUrl + request
         if method != 'POST':
             if query:
                 suffix = '?' + self.urlencode(query)

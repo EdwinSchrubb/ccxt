@@ -51,7 +51,7 @@ class bleutrade extends Exchange {
                     'v3Private' => 'https://{hostname}/api/v3/private',
                     'v3Public' => 'https://{hostname}/api/v3/public',
                 ),
-                'www' => ['https://bleutrade.com'],
+                'www' => 'https://bleutrade.com',
                 'doc' => array(
                     'https://app.swaggerhub.com/apis-docs/bleu/white-label/3.0.0',
                 ),
@@ -337,16 +337,15 @@ class bleutrade extends Exchange {
         );
     }
 
-    public function parse_ohlcv($ohlcv, $market = null, $timeframe = '1d', $since = null, $limit = null) {
-        $timestamp = $this->parse8601($ohlcv['TimeStamp'] . '+00:00');
-        return array(
-            $timestamp,
+    public function parse_ohlcv($ohlcv, $market = null) {
+        return [
+            $this->parse8601($ohlcv['TimeStamp'] . '+00:00'),
             $this->safe_float($ohlcv, 'Open'),
             $this->safe_float($ohlcv, 'High'),
             $this->safe_float($ohlcv, 'Low'),
             $this->safe_float($ohlcv, 'Close'),
             $this->safe_float($ohlcv, 'Volume'),
-        );
+        ];
     }
 
     public function fetch_ohlcv($symbol, $timeframe = '15m', $since = null, $limit = null, $params = array ()) {
@@ -358,7 +357,8 @@ class bleutrade extends Exchange {
             'count' => $limit,
         );
         $response = $this->v3PublicGetGetcandles (array_merge($request, $params));
-        return $this->parse_ohlcvs($response['result'], $market, $timeframe, $since, $limit);
+        $result = $this->safe_value($response, 'result', array());
+        return $this->parse_ohlcvs($result, $market, $timeframe, $since, $limit);
     }
 
     public function create_order($symbol, $type, $side, $amount, $price = null, $params = array ()) {

@@ -33,9 +33,10 @@ namespace ccxt;
 use kornrunner\Keccak;
 use kornrunner\Solidity;
 use Elliptic\EC;
+use Elliptic\EdDSA;
 use BN\BN;
 
-$version = '1.28.82';
+$version = '1.31.33';
 
 // rounding mode
 const TRUNCATE = 0;
@@ -54,10 +55,13 @@ const PAD_WITH_ZERO = 1;
 
 class Exchange {
 
-    const VERSION = '1.28.82';
+    const VERSION = '1.31.33';
+
+    private static $base58_alphabet = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+    private static $base58_encoder = null;
+    private static $base58_decoder = null;
 
     public static $exchanges = array(
-        '_1btcxe',
         'acx',
         'anxpro',
         'aofex',
@@ -80,10 +84,12 @@ class Exchange {
         'bitmart',
         'bitmax',
         'bitmex',
+        'bitpanda',
         'bitso',
         'bitstamp',
         'bitstamp1',
         'bittrex',
+        'bitvavo',
         'bitz',
         'bl3p',
         'bleutrade',
@@ -91,7 +97,6 @@ class Exchange {
         'btcalpha',
         'btcbox',
         'btcmarkets',
-        'btctradeim',
         'btctradeua',
         'btcturk',
         'buda',
@@ -116,6 +121,7 @@ class Exchange {
         'coolcoin',
         'coss',
         'crex24',
+        'currencycom',
         'deribit',
         'digifinex',
         'dsx',
@@ -133,6 +139,7 @@ class Exchange {
         'hbtc',
         'hitbtc',
         'hollaex',
+        'huobijp',
         'huobipro',
         'huobiru',
         'ice3x',
@@ -140,7 +147,6 @@ class Exchange {
         'independentreserve',
         'indodax',
         'itbit',
-        'kkex',
         'kraken',
         'kucoin',
         'kuna',
@@ -157,6 +163,7 @@ class Exchange {
         'okcoin',
         'okex',
         'paymium',
+        'phemex',
         'poloniex',
         'probit',
         'qtrade',
@@ -165,15 +172,14 @@ class Exchange {
         'stex',
         'stronghold',
         'surbitcoin',
-        'theocean',
         'therock',
         'tidebit',
         'tidex',
         'timex',
-        'topq',
         'upbit',
         'vaultoro',
         'vbtc',
+        'wavesexchange',
         'whitebit',
         'xbtce',
         'yobit',
@@ -601,7 +607,7 @@ class Exchange {
         return urldecode($this->urlencode($array));
     }
 
-    public function encode_uri_component($string) {
+    public static function encode_uri_component($string) {
         return urlencode($string);
     }
 
@@ -614,16 +620,16 @@ class Exchange {
         return $result;
     }
 
-    public function seconds() {
+    public static function seconds() {
         return time();
     }
 
-    public function milliseconds() {
+    public static function milliseconds() {
         list($msec, $sec) = explode(' ', microtime());
         return (int) ($sec . substr($msec, 2, 3));
     }
 
-    public function microseconds() {
+    public static function microseconds() {
         list($msec, $sec) = explode(' ', microtime());
         return $sec . str_pad(substr($msec, 2, 6), 6, '0');
     }
@@ -681,7 +687,7 @@ class Exchange {
 
     public static function rfc2616($timestamp) {
         if (!$timestamp) {
-            $timestamp = $this->milliseconds();
+            $timestamp = static::milliseconds();
         }
         return gmdate('D, d M Y H:i:s T', (int) round($timestamp / 1000));
     }
@@ -861,6 +867,7 @@ class Exchange {
         $this->fees = array('trading' => array(), 'funding' => array());
         $this->precision = array();
         $this->orders = array();
+        $this->myTrades = null;
         $this->trades = array();
         $this->transactions = array();
         $this->ohlcvs = array();
@@ -981,6 +988,7 @@ class Exchange {
             'fetchWithdrawals' => false,
             'privateAPI' => true,
             'publicAPI' => true,
+            'signIn' => false,
             'withdraw' => false,
         );
 
@@ -999,6 +1007,7 @@ class Exchange {
         $this->last_response_headers = null;
 
         $this->requiresWeb3 = false;
+        $this->requiresEddsa = false;
 
         $this->commonCurrencies = array(
             'XBT' => 'BTC',
@@ -1176,7 +1185,13 @@ class Exchange {
         return $signature;
     }
 
-    // this method is experimental
+    public static function eddsa($request, $secret, $algorithm = 'ed25519') {
+        // this method is experimental ( ͡° ͜ʖ ͡°)
+        $curve = new EdDSA ($algorithm);
+        $signature = $curve->signModified ($request, $secret);
+        return static::binary_to_base58(static::base16_to_binary($signature->toHex()));
+    }
+
     public function throttle() {
         $now = $this->milliseconds();
         $elapsed = $now - $this->lastRestRequestTimestamp;
@@ -1584,12 +1599,12 @@ class Exchange {
         return $this->accounts;
     }
 
-    public function parse_ohlcv($ohlcv, $market = null, $timeframe = 60, $since = null, $limit = null) {
+    public function parse_ohlcv($ohlcv, $market = null) {
         return ('array' === gettype($ohlcv) && !static::is_associative($ohlcv)) ? array_slice($ohlcv, 0, 6) : $ohlcv;
     }
 
-    public function parseOHLCV($ohlcv, $market = null, $timeframe = 60, $since = null, $limit = null) {
-        return $this->parse_ohlcv($ohlcv, $market, $timeframe, $since, $limit);
+    public function parseOHLCV($ohlcv, $market = null) {
+        return $this->parse_ohlcv($ohlcv, $market);
     }
 
     public function parse_ohlcvs($ohlcvs, $market = null, $timeframe = 60, $since = null, $limit = null) {
@@ -1600,7 +1615,7 @@ class Exchange {
             if ($limit && (count($result) >= $limit)) {
                 break;
             }
-            $ohlcv = $this->parse_ohlcv($ohlcvs[$i], $market, $timeframe, $since, $limit);
+            $ohlcv = $this->parse_ohlcv($ohlcvs[$i], $market);
             if ($since && ($ohlcv[0] < $since)) {
                 continue;
             }
@@ -2661,7 +2676,7 @@ class Exchange {
 
     public static function has_web3() {
         // PHP version of this function does nothing, as most of its
-        // dependencies are very lighweight and don't eat a lot
+        // dependencies are lightweight and don't eat a lot
         return true;
     }
 
@@ -2796,18 +2811,14 @@ class Exchange {
         return str_pad((string) $otp, 6, '0', STR_PAD_LEFT);
     }
 
-    public static function pack_byte ($n) {
-        return pack('C', $n);
-    }
-
     public static function number_to_be($n, $padding) {
         $n = new BN ($n);
-        return array_reduce(array_map('static::pack_byte', $n->toArray('little', $padding)), function ($a, $b) { return $a . $b; });
+        return array_reduce(array_map('chr', $n->toArray('be', $padding)), 'static::binary_concat');
     }
 
     public static function number_to_le($n, $padding) {
         $n = new BN ($n);
-        return array_reduce(array_map('static::pack_byte', $n->toArray('little', $padding)), function ($a, $b) { return $b . $a; });
+        return array_reduce(array_map('chr', $n->toArray('le', $padding)), 'static::binary_concat');
     }
 
     public static function integer_divide($a, $b) {
@@ -2820,5 +2831,50 @@ class Exchange {
 
     public static function integer_pow($a, $b) {
         return (new BN ($a))->pow (new BN ($b));
+    }
+
+    public static function base58_to_binary($s) {
+        if (!self::$base58_decoder) {
+            self::$base58_decoder = array();
+            self::$base58_encoder = array();
+            for ($i = 0; $i < strlen(self::$base58_alphabet); $i++) {
+                $bigNum = new BN($i);
+                self::$base58_decoder[self::$base58_alphabet[$i]] = $bigNum;
+                self::$base58_encoder[$i] = self::$base58_alphabet[$i];
+            }
+        }
+        $result = new BN(0);
+        $base = new BN(58);
+        for ($i = 0; $i < strlen($s); $i++) {
+            $result->imul($base);
+            $result->iadd(self::$base58_decoder[$s[$i]]);
+        }
+        return static::number_to_be($result, 0);
+    }
+
+    public static function binary_to_base58($b) {
+        if (!self::$base58_encoder) {
+            self::$base58_decoder = array();
+            self::$base58_encoder = array();
+            for ($i = 0; $i < strlen(self::$base58_alphabet); $i++) {
+                $bigNum = new BN($i);
+                self::$base58_decoder[self::$base58_alphabet[$i]] = $bigNum;
+                self::$base58_encoder[$i] = self::$base58_alphabet[$i];
+            }
+        }
+        // convert binary to decimal
+        $result = new BN(0);
+        $fromBase = new BN (0x100);
+        $string = array();
+        foreach (str_split($b) as $c) {
+            $result->imul($fromBase);
+            $result->iadd(new BN(ord($c)));
+        }
+        while (!$result->isZero()) {
+            $next_character = $result->modn(58);
+            $result->idivn(58);
+            $string[] = self::$base58_encoder[$next_character];
+        }
+        return implode('', array_reverse($string));
     }
 }

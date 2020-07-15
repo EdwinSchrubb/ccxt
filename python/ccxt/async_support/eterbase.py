@@ -63,6 +63,7 @@ class eterbase(Exchange):
                 'www': 'https://www.eterbase.com',
                 'doc': 'https://developers.eterbase.exchange',
                 'fees': 'https://www.eterbase.com/exchange/fees',
+                'referral': 'https://eterbase.exchange/invite/1wjjh4Pe',
             },
             'api': {
                 'markets': {
@@ -556,7 +557,7 @@ class eterbase(Exchange):
         timestamp = self.safe_integer(response, 'timestamp')
         return self.parse_order_book(response, timestamp)
 
-    def parse_ohlcv(self, ohlcv, market=None, timeframe='1m', since=None, limit=None):
+    def parse_ohlcv(self, ohlcv, market=None):
         #
         #     {
         #         "time":1588807500000,
@@ -1055,7 +1056,7 @@ class eterbase(Exchange):
                 headersCSV += ' ' + 'digest'
             signature64 = self.hmac(self.encode(message), self.encode(self.secret), hashlib.sha256, 'base64')
             signature = self.decode(signature64)
-            authorizationHeader = 'hmac username="' + self.apiKey + '",algorithm="hmac-sha256",headers="' + headersCSV + '",signature="' + signature + '"'
+            authorizationHeader = 'hmac username="' + self.apiKey + '",algorithm="hmac-sha256",headers="' + headersCSV + '",' + 'signature="' + signature + '"'
             httpHeaders = {
                 'Date': date,
                 'Authorization': authorizationHeader,

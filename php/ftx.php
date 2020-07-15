@@ -19,12 +19,13 @@ class ftx extends Exchange {
             'rateLimit' => 100,
             'certified' => true,
             'pro' => true,
+            'hostname' => 'ftx.com', // or ftx.us
             'urls' => array(
                 'logo' => 'https://user-images.githubusercontent.com/1294454/67149189-df896480-f2b0-11e9-8816-41593e17f9ec.jpg',
                 'www' => 'https://ftx.com',
                 'api' => array(
-                    'public' => 'https://ftx.com',
-                    'private' => 'https://ftx.com',
+                    'public' => 'https://{hostname}',
+                    'private' => 'https://{hostname}',
                 ),
                 'doc' => 'https://github.com/ftexchange/ftx',
                 'fees' => 'https://ftexchange.zendesk.com/hc/en-us/articles/360024479432-Fees',
@@ -98,6 +99,7 @@ class ftx extends Exchange {
                         'lt/redemptions',
                         'subaccounts',
                         'subaccounts/{nickname}/balances',
+                        'otc/quotes/{quoteId}',
                     ),
                     'post' => array(
                         'account/leverage',
@@ -109,6 +111,8 @@ class ftx extends Exchange {
                         'subaccounts',
                         'subaccounts/update_name',
                         'subaccounts/transfer',
+                        'otc/quotes/{quote_id}/accept',
+                        'otc/quotes',
                     ),
                     'delete' => array(
                         'orders/{order_id}',
@@ -494,7 +498,7 @@ class ftx extends Exchange {
         return $this->parse_order_book($result);
     }
 
-    public function parse_ohlcv($ohlcv, $market = null, $timeframe = '1m', $since = null, $limit = null) {
+    public function parse_ohlcv($ohlcv, $market = null) {
         //
         //     {
         //         "close":177.23,
@@ -516,12 +520,29 @@ class ftx extends Exchange {
         );
     }
 
+    public function get_market_id($symbol, $key, $params = array ()) {
+        $parts = $this->get_market_params($symbol, $key, $params);
+        return $this->safe_string($parts, 1, $symbol);
+    }
+
+    public function get_market_params($symbol, $key, $params = array ()) {
+        $market = null;
+        $marketId = null;
+        if (is_array($this->markets) && array_key_exists($symbol, $this->markets)) {
+            $market = $this->market($symbol);
+            $marketId = $market['id'];
+        } else {
+            $marketId = $this->safe_string($params, $key, $symbol);
+        }
+        return array( $market, $marketId );
+    }
+
     public function fetch_ohlcv($symbol, $timeframe = '1m', $since = null, $limit = null, $params = array ()) {
         $this->load_markets();
-        $market = $this->market($symbol);
+        list($market, $marketId) = $this->get_market_params($symbol, 'market_name', $params);
         $request = array(
-            'market_name' => $market['id'],
             'resolution' => $this->timeframes[$timeframe],
+            'market_name' => $marketId,
         );
         // max 1501 candles, including the current candle when $since is not specified
         $limit = ($limit === null) ? 1501 : $limit;
@@ -657,9 +678,9 @@ class ftx extends Exchange {
 
     public function fetch_trades($symbol, $since = null, $limit = null, $params = array ()) {
         $this->load_markets();
-        $market = $this->market($symbol);
+        list($market, $marketId) = $this->get_market_params($symbol, 'market_name', $params);
         $request = array(
-            'market_name' => $market['id'],
+            'market_name' => $marketId,
         );
         if ($since !== null) {
             $request['start_time'] = intval ($since / 1000);
@@ -852,9 +873,15 @@ class ftx extends Exchange {
         $remaining = $this->safe_float($order, 'remainingSize');
         $symbol = null;
         $marketId = $this->safe_string($order, 'market');
-        if (is_array($this->markets_by_id) && array_key_exists($marketId, $this->markets_by_id)) {
-            $market = $this->markets_by_id[$marketId];
-            $symbol = $market['symbol'];
+        if ($marketId !== null) {
+            if (is_array($this->markets_by_id) && array_key_exists($marketId, $this->markets_by_id)) {
+                $market = $this->markets_by_id[$marketId];
+                $symbol = $market['symbol'];
+            } else {
+                // support for delisted $market ids
+                // https://github.com/ccxt/ccxt/issues/7113
+                $symbol = $marketId;
+            }
         }
         if (($symbol === null) && ($market !== null)) {
             $symbol = $market['symbol'];
@@ -909,7 +936,7 @@ class ftx extends Exchange {
         );
         $clientOrderId = $this->safe_string_2($params, 'clientId', 'clientOrderId');
         if ($clientOrderId !== null) {
-            $params['clientId'] = $clientOrderId;
+            $request['clientId'] = $clientOrderId;
             $params = $this->omit($params, array( 'clientId', 'clientOrderId' ));
         }
         $priceToPrecision = null;
@@ -1023,14 +1050,13 @@ class ftx extends Exchange {
     public function cancel_all_orders($symbol = null, $params = array ()) {
         $this->load_markets();
         $request = array(
-            // 'market' => $market['id'], // optional
+            // 'market' => market['id'], // optional
             'conditionalOrdersOnly' => false, // cancel conditional orders only
             'limitOrdersOnly' => false, // cancel existing limit orders (non-conditional orders) only
         );
-        $market = null;
-        if ($symbol !== null) {
-            $market = $this->market($symbol);
-            $request['market'] = $market['id'];
+        $marketId = $this->get_market_id($symbol, 'market', $params);
+        if ($marketId !== null) {
+            $request['market'] = $marketId;
         }
         $response = $this->privateDeleteOrders (array_merge($request, $params));
         $result = $this->safe_value($response, 'result', array());
@@ -1086,10 +1112,9 @@ class ftx extends Exchange {
     public function fetch_open_orders($symbol = null, $since = null, $limit = null, $params = array ()) {
         $this->load_markets();
         $request = array();
-        $market = null;
-        if ($symbol !== null) {
-            $market = $this->market($symbol);
-            $request['market'] = $market['id'];
+        list($market, $marketId) = $this->get_market_params($symbol, 'market', $params);
+        if ($marketId !== null) {
+            $request['market'] = $marketId;
         }
         // support for canceling conditional orders
         // https://github.com/ccxt/ccxt/issues/6669
@@ -1134,10 +1159,9 @@ class ftx extends Exchange {
     public function fetch_orders($symbol = null, $since = null, $limit = null, $params = array ()) {
         $this->load_markets();
         $request = array();
-        $market = null;
-        if ($symbol !== null) {
-            $market = $this->market($symbol);
-            $request['market'] = $market['id'];
+        list($market, $marketId) = $this->get_market_params($symbol, 'market', $params);
+        if ($marketId !== null) {
+            $request['market'] = $marketId;
         }
         if ($limit !== null) {
             $request['limit'] = $limit; // default 100, max 100
@@ -1187,10 +1211,11 @@ class ftx extends Exchange {
 
     public function fetch_my_trades($symbol = null, $since = null, $limit = null, $params = array ()) {
         $this->load_markets();
-        $market = $this->market($symbol);
-        $request = array(
-            'market' => $market['id'],
-        );
+        list($market, $marketId) = $this->get_market_params($symbol, 'market', $params);
+        $request = array();
+        if ($marketId !== null) {
+            $request['market'] = $marketId;
+        }
         if ($limit !== null) {
             $request['limit'] = $limit;
         }
@@ -1416,7 +1441,8 @@ class ftx extends Exchange {
     public function sign($path, $api = 'public', $method = 'GET', $params = array (), $headers = null, $body = null) {
         $request = '/api/' . $this->implode_params($path, $params);
         $query = $this->omit($params, $this->extract_params($path));
-        $url = $this->urls['api'][$api] . $request;
+        $baseUrl = $this->implode_params($this->urls['api'][$api], array( 'hostname' => $this->hostname ));
+        $url = $baseUrl . $request;
         if ($method !== 'POST') {
             if ($query) {
                 $suffix = '?' . $this->urlencode($query);

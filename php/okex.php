@@ -1300,7 +1300,7 @@ class okex extends Exchange {
         return $this->parse_trades($response, $market, $since, $limit);
     }
 
-    public function parse_ohlcv($ohlcv, $market = null, $timeframe = '1m', $since = null, $limit = null) {
+    public function parse_ohlcv($ohlcv, $market = null) {
         //
         // spot markets
         //
@@ -1328,20 +1328,20 @@ class okex extends Exchange {
         if (gettype($ohlcv) === 'array' && count(array_filter(array_keys($ohlcv), 'is_string')) == 0) {
             $numElements = is_array($ohlcv) ? count($ohlcv) : 0;
             $volumeIndex = ($numElements > 6) ? 6 : 5;
-            $timestamp = $ohlcv[0];
+            $timestamp = $this->safe_value($ohlcv, 0);
             if (gettype($timestamp) === 'string') {
                 $timestamp = $this->parse8601($timestamp);
             }
-            return [
+            return array(
                 $timestamp, // $timestamp
-                floatval ($ohlcv[1]),            // Open
-                floatval ($ohlcv[2]),            // High
-                floatval ($ohlcv[3]),            // Low
-                floatval ($ohlcv[4]),            // Close
-                // floatval ($ohlcv[5]),         // Quote Volume
-                // floatval ($ohlcv[6]),         // Base Volume
-                floatval ($ohlcv[$volumeIndex]),  // Volume, okex will return base volume in the 7th element for future markets
-            ];
+                $this->safe_float($ohlcv, 1),            // Open
+                $this->safe_float($ohlcv, 2),            // High
+                $this->safe_float($ohlcv, 3),            // Low
+                $this->safe_float($ohlcv, 4),            // Close
+                // $this->safe_float($ohlcv, 5),         // Quote Volume
+                // $this->safe_float($ohlcv, 6),         // Base Volume
+                $this->safe_float($ohlcv, $volumeIndex),  // Volume, okex will return base volume in the 7th element for future markets
+            );
         } else {
             return array(
                 $this->parse8601($this->safe_string($ohlcv, 'time')),
@@ -1379,37 +1379,47 @@ class okex extends Exchange {
         //
         // spot markets
         //
-        //     array( array(  close => "0.02683401",
-        //           high => "0.02683401",
-        //            low => "0.02683401",
-        //           open => "0.02683401",
-        //           time => "2018-12-17T23:47:00.000Z",
-        //         volume => "0"                         ),
-        //       ...
-        //       {  close => "0.02684545",
-        //           high => "0.02685084",
-        //            low => "0.02683312",
-        //           open => "0.02683894",
-        //           time => "2018-12-17T20:28:00.000Z",
-        //         volume => "101.457222"                }  )
+        //     array(
+        //         array(
+        //             close => "0.02683401",
+        //             high => "0.02683401",
+        //             low => "0.02683401",
+        //             open => "0.02683401",
+        //             time => "2018-12-17T23:47:00.000Z",
+        //             volume => "0"
+        //         ),
+        //         {
+        //             close => "0.02684545",
+        //             high => "0.02685084",
+        //             low => "0.02683312",
+        //             open => "0.02683894",
+        //             time => "2018-12-17T20:28:00.000Z",
+        //             volume => "101.457222"
+        //         }
+        //     )
         //
         // futures
         //
-        //     array( array( 1545090660000,
-        //         0.3171,
-        //         0.3174,
-        //         0.3171,
-        //         0.3173,
-        //         1648,
-        //         51930.38579450868 ),
-        //       ...
-        //       array( 1545072720000,
-        //         0.3159,
-        //         0.3161,
-        //         0.3144,
-        //         0.3149,
-        //         22886,
-        //         725179.26172331 )    )
+        //     array(
+        //         array(
+        //             1545090660000,
+        //             0.3171,
+        //             0.3174,
+        //             0.3171,
+        //             0.3173,
+        //             1648,
+        //             51930.38579450868
+        //         ),
+        //         array(
+        //             1545072720000,
+        //             0.3159,
+        //             0.3161,
+        //             0.3144,
+        //             0.3149,
+        //             22886,
+        //             725179.26172331
+        //         )
+        //     )
         //
         return $this->parse_ohlcvs($response, $market, $timeframe, $since, $limit);
     }
@@ -1794,7 +1804,7 @@ class okex extends Exchange {
         $request = array(
             'instrument_id' => $market['id'],
             // 'client_oid' => 'abcdef1234567890', // [a-z0-9]array(1,32)
-            // 'order_type' => '0', // 0 => Normal limit order (Unfilled and 0 represent normal limit order) 1 => Post only 2 => Fill Or Kill 3 => Immediatel Or Cancel
+            // 'order_type' => '0', // 0 => Normal limit $order (Unfilled and 0 represent normal limit $order) 1 => Post only 2 => Fill Or Kill 3 => Immediatel Or Cancel
         );
         $clientOrderId = $this->safe_string_2($params, 'client_oid', 'clientOrderId');
         if ($clientOrderId !== null) {
@@ -1808,7 +1818,7 @@ class okex extends Exchange {
                 'type' => $type, // 1:open long 2:open short 3:close long 4:close short for futures
                 'size' => $size,
                 'price' => $this->price_to_precision($symbol, $price),
-                // 'match_price' => '0', // Order at best counter party $price? (0:no 1:yes). The default is 0. If it is set as 1, the $price parameter will be ignored. When posting orders at best bid $price, order_type can only be 0 (regular order).
+                // 'match_price' => '0', // Order at best counter party $price? (0:no 1:yes). The default is 0. If it is set as 1, the $price parameter will be ignored. When posting orders at best bid $price, order_type can only be 0 (regular $order).
             ));
             if ($market['futures']) {
                 $request['leverage'] = '10'; // or '20'
@@ -1835,7 +1845,7 @@ class okex extends Exchange {
                                 $notional = $amount * $price;
                             }
                         } else if ($notional === null) {
-                            throw new InvalidOrder($this->id . " createOrder() requires the $price argument with $market buy orders to calculate total order cost ($amount to spend), where cost = $amount * $price-> Supply a $price argument to createOrder() call if you want the cost to be calculated for you from $price and $amount, or, alternatively, add .options['createMarketBuyOrderRequiresPrice'] = false and supply the total cost value in the 'amount' argument or in the 'notional' extra parameter (the exchange-specific behaviour)");
+                            throw new InvalidOrder($this->id . " createOrder() requires the $price argument with $market buy orders to calculate total $order cost ($amount to spend), where cost = $amount * $price-> Supply a $price argument to createOrder() call if you want the cost to be calculated for you from $price and $amount, or, alternatively, add .options['createMarketBuyOrderRequiresPrice'] = false and supply the total cost value in the 'amount' argument or in the 'notional' extra parameter (the exchange-specific behaviour)");
                         }
                     } else {
                         $notional = ($notional === null) ? $amount : $notional;
@@ -1858,7 +1868,11 @@ class okex extends Exchange {
         //         "result":true
         //     }
         //
-        return $this->parse_order($response, $market);
+        $order = $this->parse_order($response, $market);
+        return array_merge($order, array(
+            'type' => $type,
+            'side' => $side,
+        ));
     }
 
     public function cancel_order($id, $symbol = null, $params = array ()) {
@@ -2015,13 +2029,6 @@ class okex extends Exchange {
         if (($side !== 'buy') && ($side !== 'sell')) {
             $side = $this->parse_order_side($type);
         }
-        if (($type !== 'limit') && ($type !== 'market')) {
-            if (is_array($order) && array_key_exists('pnl', $order)) {
-                $type = 'futures';
-            } else {
-                $type = 'swap';
-            }
-        }
         $symbol = null;
         $marketId = $this->safe_string($order, 'instrument_id');
         if (is_array($this->markets_by_id) && array_key_exists($marketId, $this->markets_by_id)) {
@@ -2070,6 +2077,9 @@ class okex extends Exchange {
             );
         }
         $clientOrderId = $this->safe_string($order, 'client_oid');
+        if (strlen($clientOrderId) < 1) {
+            $clientOrderId = null; // fix empty $clientOrderId string
+        }
         return array(
             'info' => $order,
             'id' => $id,
@@ -2725,8 +2735,8 @@ class okex extends Exchange {
         $request = array(
             'instrument_id' => $market['id'],
             // 'order_id' => id, // string
-            // 'after' => '1', // return the page after the specified page number
-            // 'before' => '1', // return the page before the specified page number
+            // 'after' => '1', // pagination of data to return records earlier than the requested ledger_id
+            // 'before' => '1', // P=pagination of data to return records newer than the requested ledger_id
             // 'limit' => $limit, // optional, number of results per $request, default = maximum = 100
         );
         $defaultType = $this->safe_string_2($this->options, 'fetchMyTrades', 'defaultType');
@@ -3008,6 +3018,10 @@ class okex extends Exchange {
         //         ),
         //     )
         //
+        $responseLength = is_array($response) ? count($response) : 0;
+        if ($responseLength < 1) {
+            return array();
+        }
         $isArray = gettype($response[0]) === 'array' && count(array_filter(array_keys($response[0]), 'is_string')) == 0;
         $isMargin = ($type === 'margin');
         $entries = ($isMargin && $isArray) ? $response[0] : $response;
